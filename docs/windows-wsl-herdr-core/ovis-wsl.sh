@@ -217,13 +217,21 @@ cmd_pair() {
   [ -z "$url" ] || echo "Open $url on the phone and enter the code."
 }
 
+# Brings in Ovis's own changes: your branch is rebased onto upstream/main (OVIS_UPSTREAM names the remote, default
+# `upstream`, else `origin`). A conflict aborts the rebase and leaves the branch as it was.
 cmd_update() {
   cd "$REPO"
   [ -z "$(git status --porcelain --untracked-files=no)" ] || die "uncommitted changes in $REPO: commit or stash first"
+  local remote="${OVIS_UPSTREAM:-upstream}" branch="${OVIS_UPSTREAM_BRANCH:-main}"
+  git remote get-url "$remote" >/dev/null 2>&1 || remote=origin
+  git symbolic-ref -q HEAD >/dev/null || die "detached HEAD: check out your branch first"
   local was_running=0
   if running_pid >/dev/null || { has_unit && systemctl --user is-active --quiet "$UNIT"; }; then was_running=1; fi
-  git fetch --quiet origin
-  git merge --ff-only '@{upstream}' || die "cannot fast-forward: merge or rebase by hand"
+  git fetch --quiet "$remote"
+  if ! git rebase "$remote/$branch"; then
+    git rebase --abort
+    die "conflicts with $remote/$branch: nothing changed; rebase by hand and resolve them"
+  fi
   bun install --frozen-lockfile
   if [ "$was_running" = 1 ]; then cmd_stop; cmd_start; fi
 }
