@@ -94,7 +94,7 @@ that was not tested. Not verified: Tailscale itself (not installed on this PC), 
 **Who gets in.** Ovis trusts a Tailscale login only when it can compare it with this PC's login from
 `tailscale status`, which Ovis runs where it runs. In WSL there is no `tailscale`, so a phone is not
 recognised as "you": it enters the **token** (once per browser, kept for a year) or a six-digit **pairing
-code** from Settings → Phone & devices. With a token set, everything else needs it too (this PC
+code** from Settings → Devices and PCs → Connect a device. With a token set, everything else needs it too (this PC
 included) ([Access and safety](../guide.md#access-and-safety)).
 
 1. Install Tailscale on Windows (needs approval; it adds a Windows service of its own):
@@ -125,7 +125,7 @@ included) ([Access and safety](../guide.md#access-and-safety)).
    firewall rule is needed (the only listener is on loopback).
 5. On the phone (Tailscale on), open `https://<pc>.<tailnet>.ts.net` in Chrome, enter the token (read it
    on the PC with `sed -n 's/^OVIS_TOKEN=//p' ~/.config/ovis/token.env`, not in a shared screen or log),
-   then Settings → Phone & devices → Install app.
+   then Settings → Devices and PCs → Connect a device (or the browser's Install app).
 6. Undo: `tailscale serve --https=443 off` (Windows), `$S stop` (WSL). The core is untouched either way.
 
 Checks on the phone: on Wi-Fi and again on mobile data the address opens; the workspaces and panes match
