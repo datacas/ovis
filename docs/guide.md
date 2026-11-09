@@ -883,8 +883,7 @@ PC's panes are then the app's. One server serves one runtime, chosen as it start
 1. `OVIS_RUNTIME` (`herdr` or `herdr-core`) in the server's environment, when it is set;
 2. else the choice made in **Settings → About → Terminals** (saved as `runtime-<port>.json` in the state folder);
 3. else what the PC has. Any trace of herdr's TUI (a `herdr` on the `PATH` or in `~/.local/bin`,
-   `~/.config/herdr/config.toml`, or its socket; on Windows `%LOCALAPPDATA%\Programs\Herdr\bin`
-   and `%APPDATA%\herdr`) keeps herdr, and nothing is run to decide it.
+   `~/.config/herdr/config.toml`, or its socket) keeps herdr, and nothing is run to decide it.
    Only a PC with none looks for herdr-core, and picks it when an `hc` answers `--version` and the
    Herdr app is installed or its core runs.
 
@@ -919,7 +918,8 @@ Whether the core runs is read from its socket file (`HC_SOCKET`, `socket` in hc'
 session, `default` otherwise); nothing connects to it.
 
 On Windows the automatic choice stays on herdr: Ovis serves herdr-core when it is chosen in
-Settings, or when `OVIS_RUNTIME=herdr-core` is set, as the desktop app sets it.
+Settings, or when `OVIS_RUNTIME=herdr-core` is set, as the desktop app sets it. Settings and
+`/api/health` find herdr there in `%LOCALAPPDATA%\Programs\Herdr\bin` and `%APPDATA%\herdr`.
 
 **Moving everything to herdr-core.** On a Linux or macOS PC where Ovis serves herdr's TUI through
 its own launcher and no Herdr app is installed, **Settings → About → Terminals** offers **Move
