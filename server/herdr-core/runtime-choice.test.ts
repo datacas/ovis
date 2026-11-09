@@ -62,6 +62,14 @@ it("reads herdr's traces where herdr keeps them on Windows", () => {
   expect(runtimeTraces({ env: { ...windows, XDG_CONFIG_HOME: join(root, "xdg") }, home, platform: "win32" })).toMatchObject({ tuiInstalled: false, tuiRunning: true });
 });
 
+it("finds a herdr.exe on the Windows Path, whose key Windows spells Path", () => {
+  const { home, env, touch, root } = scratch();
+  const { PATH: _unused, ...rest } = env;
+  const windows = { ...rest, XDG_CONFIG_HOME: "", APPDATA: join(root, "Roaming"), LOCALAPPDATA: join(root, "Local") };
+  touch(join(root, "tools", "herdr.exe"));
+  expect(runtimeTraces({ env: { ...windows, Path: `${join(root, "empty")};${join(root, "tools")}` }, home, platform: "win32" }).tuiInstalled).toBe(true);
+});
+
 it("keeps herdr wherever herdr's TUI left a trace, without looking for hc", async () => {
   const { home, state, env, touch, root } = scratch();
   mkdirSync(join(home, ".local", "share", "herdr-app"), { recursive: true });

@@ -49,12 +49,14 @@ export function runtimeTraces(options: TraceOptions = {}): RuntimeTraces {
   const herdrDirs = [...new Set([dirname(herdrConfigPath({ ...env, HERDR_CONFIG_PATH: undefined }, platform, home)), platform === "win32" ? join(appData, "herdr") : join(home, ".config", "herdr")])];
   // where herdr's installer puts it: ~/.local/bin, and %LOCALAPPDATA%\Programs\Herdr\bin on Windows
   const installDir = platform === "win32" ? join(env["LOCALAPPDATA"] || join(home, "AppData", "Local"), "Programs", "Herdr", "bin") : join(home, ".local", "bin");
-  const herdrOnPath = (env["PATH"] ?? "").split(platform === "win32" ? ";" : delimiter).filter((dir) => dir !== "")
+  // Windows spells the key Path, and a copy of process.env keeps that spelling (as scripts/plugin.ts reads it)
+  const path = env[platform === "win32" ? Object.keys(env).sort().find((key) => key.toLowerCase() === "path") ?? "PATH" : "PATH"] ?? "";
+  const herdrOnPath = path.split(platform === "win32" ? ";" : delimiter).filter((dir) => dir !== "")
     .some((dir) => isFile(join(dir, `herdr${exe}`)));
   // OVIS_HERDR_BIN names the herdr Ovis runs, wherever it is
   const named = env["OVIS_HERDR_BIN"];
   // a bare name is looked up on PATH, as the spawn does (server/core/terminal-process.ts)
-  const namedFound = named !== undefined && named !== "" && (/[\\/]/.test(named) ? isFile(named) : Bun.which(named, { PATH: env["PATH"] ?? "" }) !== null);
+  const namedFound = named !== undefined && named !== "" && (/[\\/]/.test(named) ? isFile(named) : Bun.which(named, { PATH: path }) !== null);
   // HERDR_CONFIG_PATH names herdr's config wherever it is kept (herdrConfigPath in server/herdr-sidebar.ts)
   const configPath = env["HERDR_CONFIG_PATH"];
   const tuiInstalled = herdrOnPath || namedFound || isFile(join(installDir, `herdr${exe}`)) || herdrDirs.some((dir) => isFile(join(dir, "config.toml")))
