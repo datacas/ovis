@@ -73,6 +73,7 @@ $S token create     # once: ~/.config/ovis/token.env, directory 700, file 600; n
 $S start            # 127.0.0.1:7317; log in ~/.local/state/ovis-wsl/server.log (mode 600)
 $S status           # pid, hc.exe version, a warning if the port listens beyond loopback
 $S stop             # stops only the server it started (checked by its command line)
+$S pair             # a six-digit code for one more device, valid 10 minutes (set OVIS_URL in wsl.env to print the address too)
 $S update           # git fetch + fast-forward + bun install --frozen-lockfile; restarts only if it ran
 $S token rotate     # a new token; restart to use it, and sign each device in again
 ```

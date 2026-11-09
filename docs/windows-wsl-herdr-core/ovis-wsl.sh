@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Start, stop, check and update Ovis in WSL2 on the Herdr app's Windows herdr-core.
 #
-#   ovis-wsl.sh start | stop | restart | status | update | token create|rotate
+#   ovis-wsl.sh start | stop | restart | status | pair | update | token create|rotate
 #
 # It only ever starts or stops the Ovis server it started. It never runs `hc server
 # start|stop|restart`, `hc ls` or `hc server status` (each starts a core when none runs), only
@@ -10,6 +10,7 @@
 # Settings, all optional, in $OVIS_CONFIG_DIR/wsl.env (KEY=value lines) or the environment:
 #   OVIS_HC_BIN   the Windows hc.exe as WSL sees it (default: found under %LOCALAPPDATA%)
 #   PORT          Ovis's port on loopback (default 7317)
+#   OVIS_URL      the HTTPS address a phone opens, only to print it with a pairing code
 # The token lives in $OVIS_CONFIG_DIR/token.env (mode 600) and is never printed.
 set -euo pipefail
 
@@ -96,6 +97,19 @@ cmd_status() {
   if ss -ltn | awk -v p=":$PORT\$" '$4 ~ p {print $4}' | grep -v '^127\.0\.0\.1:' | grep -q .; then echo "WARNING: port $PORT listens beyond loopback"; fi
 }
 
+# A six-digit pairing code for one more device (good for 10 minutes), the way Settings → Phone & devices makes it.
+cmd_pair() {
+  settings
+  running_pid >/dev/null || die "Ovis is not running: $0 start"
+  local token reply
+  token="$(token_value)"
+  reply="$(curl -fsS -m 10 -X POST -H "Authorization: Bearer $token" -H 'x-herdr-machine: 1' -H 'content-type: application/json' \
+    -d '{}' "http://127.0.0.1:$PORT/api/devices/pair/start")" || die "could not start a pairing"
+  printf '%s' "$reply" | bun -e 'const d = JSON.parse(await Bun.stdin.text()); const c = String(d.code); console.log(`Pairing code: ${c.slice(0, 3)} ${c.slice(3)}  (one device, until ${new Date(d.expires_at).toLocaleTimeString()})`)'
+  local url; url="${OVIS_URL:-$(file_setting OVIS_URL "$CONFIG_DIR/wsl.env")}"
+  [ -z "$url" ] || echo "Open $url on the phone and enter the code."
+}
+
 cmd_update() {
   cd "$REPO"
   [ -z "$(git status --porcelain --untracked-files=no)" ] || die "uncommitted changes in $REPO: commit or stash first"
@@ -124,7 +138,8 @@ case "${1:-}" in
   stop) cmd_stop ;;
   restart) cmd_stop; cmd_start ;;
   status) cmd_status ;;
+  pair) cmd_pair ;;
   update) cmd_update ;;
   token) shift; cmd_token "${1:-}" ;;
-  *) die "usage: $0 start|stop|restart|status|update|token create|rotate" ;;
+  *) die "usage: $0 start|stop|restart|status|pair|update|token create|rotate" ;;
 esac
