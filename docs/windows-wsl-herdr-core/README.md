@@ -115,7 +115,7 @@ Start-ScheduledTask 'Ovis WSL keepalive'      # or wait for the next logon
 ```
 
 The service runs the script from the checkout, so keep that checkout on a branch that has it (after an
-`update`, `service logs` shows a failure at once). The task's hidden window flashes once at logon.
+`update`, `service logs` shows a failure at once). The task runs `wsl.exe` in a console with no window (`conhost.exe --headless`); a hidden PowerShell window ended on its own (exit `0xC000013A`) in the first cold start, so it is not used.
 
 To start the Herdr app with Windows too (not done here): add a shortcut to
 `%LOCALAPPDATA%\Programs\herdr-app\herdr-app.exe` in `shell:startup`. Without it, after a reboot Ovis waits (`status` says
@@ -208,7 +208,7 @@ the Herdr app's; output updates without reloading; after locking the phone, the 
 | `run` waits for a Windows core and never starts one (checked with a stand-in `tasklist.exe`) | PASS |
 | Logon task: created for the user, one keepalive at a time, `Start-ScheduledTask` twice leaves one `sleep` | PASS |
 | Android over Tailscale Serve (Wi-Fi and mobile data), pairing, interaction, reconnection | PASS (checked by the user on a phone) |
-| Cold start after a Windows restart (task, WSL, service, core, Tailscale) | NOT RUN (needs a restart) |
+| Cold start after a Windows restart (2026-11-09): the logon task started WSL, the service waited for the core, and Ovis came up within 15 s of the Herdr app opening; Tailscale Serve and the paired phone worked with nothing started by hand | PASS (journal: `waiting for the Herdr app's core` until the core appeared, then `Ovis listening`) |
 | Auth rejects an unauthenticated non-loopback client | NOT RUN (loopback only) |
 | `tailscale serve` HTTPS, tailnet only, no Funnel (`tailscale serve status`: tailnet only; no `AllowFunnel`) | PASS |
 | Windows (`C:\...`) repository and worktree facts from WSL | Not supported |

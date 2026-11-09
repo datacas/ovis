@@ -6,7 +6,7 @@
     ovis-wsl-task.ps1 -Status
     ovis-wsl-task.ps1 -Uninstall
 
-  The task runs `wsl.exe -d <distro> --exec <script> keepalive` in a hidden window (one named `sleep`
+  The task runs `wsl.exe -d <distro> --exec <script> keepalive` in a console with no window (one named `sleep`
   under a lock): with no process left, WSL stops the distribution and the service with it. It needs no administrator rights, changes
   no firewall rule and starts no Windows service. It does not start the Herdr app or its core; it
   does not stop anything either. Removing it leaves WSL, Ovis's service and Herdr as they are.
@@ -23,8 +23,9 @@ $name = 'Ovis WSL keepalive'
 
 if ($Install) {
   if ($Script -eq '') { throw '-Script <Linux path of ovis-wsl.sh> is required' }
-  $arg = "-NoProfile -WindowStyle Hidden -Command `"& wsl.exe -d '$Distro' --exec $Script keepalive`""
-  $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
+  # a console with no window (conhost --headless): a hidden PowerShell window ended with 0xC000013A (console closed)
+  $arg = "--headless wsl.exe -d $Distro --exec `"$Script`" keepalive"
+  $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument $arg
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
   $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
   $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) `
