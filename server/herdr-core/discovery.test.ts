@@ -191,3 +191,12 @@ it("takes no socket from a config.toml too big to be a config, so a health poll 
   writeFileSync(join(config, "herdr-core", "config.toml"), `socket = "${join(root, "configured.sock")}"\n# ${"x".repeat(2 * 1024 * 1024)}\n`);
   expect(coreSocket({ env: { XDG_CONFIG_HOME: config, XDG_RUNTIME_DIR: join(root, "run") }, home: root, platform: "linux", userRuntimeDir: null }).path).toBe(join(root, "run", "herdr-core", "default.sock"));
 });
+
+it.skipIf(!unix)("takes a Windows hc.exe named by OVIS_HC_BIN on Linux (WSL runs it through interop) and keeps its path as given", async () => {
+  const { root, log } = scratch();
+  const exe = fake(join(root, "mnt-c", "herdr-core"), "hc.exe", "hc 0.1.19", log);
+  const found = await findHc({ env: { OVIS_HC_BIN: exe, PATH: "" }, home: root, platform: "linux", loginShellPath: async () => null, usualDirs: [] });
+  expect(found).toEqual({ bin: exe, version: "0.1.19" });
+  // only `--version` is ever asked of a candidate: no core is started by looking
+  expect(runs(log)).toEqual(["--version"]);
+});
