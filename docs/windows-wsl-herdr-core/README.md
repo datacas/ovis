@@ -61,34 +61,74 @@ Text sent to a pane (`POST /api/pane/input`) is typed without Enter; `POST /api/
 `["Enter"]` sends it. Ovis never sends either by itself, and nothing typed during a disconnect is
 sent on reconnect: it waits as a draft.
 
-## Run it in the background, safely
+## Start, stop, update
 
-Run Ovis in a shell you own (`tmux`, or a Herdr pane) and stop it with its process only. Stopping
-Ovis ends only its `hc.exe connect` child; the core and its terminals keep running. Do not add a
-Windows service, scheduled task or firewall rule for this: none is needed.
+`ovis-wsl.sh` (this folder) starts Ovis on loopback with `OVIS_RUNTIME=herdr-core`, `OVIS_HC_BIN` set
+to the Windows `hc.exe` and the token below. It finds `hc.exe` under `%LOCALAPPDATA%` itself;
+`OVIS_HC_BIN` or `$OVIS_CONFIG_DIR/wsl.env` (`KEY=value` lines, also `PORT`) overrides it.
+
+```bash
+S=docs/windows-wsl-herdr-core/ovis-wsl.sh
+$S token create     # once: ~/.config/ovis/token.env, directory 700, file 600; never printed
+$S start            # 127.0.0.1:7317; log in ~/.local/state/ovis-wsl/server.log (mode 600)
+$S status           # pid, hc.exe version, a warning if the port listens beyond loopback
+$S stop             # stops only the server it started (checked by its command line)
+$S update           # git fetch + fast-forward + bun install --frozen-lockfile; restarts only if it ran
+$S token rotate     # a new token; restart to use it, and sign each device in again
+```
+
+The script never runs `hc server start|stop|restart`, `hc ls` or `hc server status` (each starts a core
+when none runs): only `hc.exe --version`. Stopping Ovis ends its `hc.exe connect` child; the core and every
+terminal keep running. It installs no Windows service, scheduled task or firewall rule. A server started
+this way ends when WSL shuts down; start it again (no state is lost: terminals live in the core).
 
 ## Android over Tailscale
 
-Not installed by this setup, and these steps are not yet run on a device. Steps for when you are ready (WSL has its own network, so install
-Tailscale on **Windows** and keep Ovis on loopback inside WSL; WSL2 forwards `localhost` to Windows
-by default):
+Verified here: Windows reaches Ovis in WSL at `http://127.0.0.1:7317`. This WSL runs
+`networkingMode=mirrored` (`wslinfo --networking-mode`), where loopback is shared between Windows and WSL;
+a Windows `Invoke-WebRequest` got 401 without the token and 200 with it, and Ovis listens on
+`127.0.0.1` only. With the default NAT mode, `localhost` forwarding to WSL is on by default as well, but
+that was not tested. Not verified: Tailscale itself (not installed on this PC), the phone.
 
-1. Install Tailscale on Windows and on the phone; sign both in to the same tailnet.
-2. In WSL, start Ovis on loopback with a token, so nothing but the tailnet can reach it:
-   ```bash
-   export OVIS_TOKEN="$(openssl rand -hex 32)"   # keep it in ~/.config/ovis/env; never print or commit it
-   HOST=127.0.0.1 PORT=7317 bun run server
+**Who gets in.** Ovis trusts a Tailscale login only when it can compare it with this PC's login from
+`tailscale status`, which Ovis runs where it runs. In WSL there is no `tailscale`, so a phone is not
+recognised as "you": it enters the **token** (once per browser, kept for a year) or a six-digit **pairing
+code** from Settings → Phone & devices. With a token set, everything else needs it too (this PC
+included) ([Access and safety](../guide.md#access-and-safety)).
+
+1. Install Tailscale on Windows (needs approval; it adds a Windows service of its own):
+   ```powershell
+   winget install --id Tailscale.Tailscale -e
+   tailscale up        # sign in; the phone's Tailscale app signs in to the same tailnet
+   tailscale status
    ```
-3. On Windows (PowerShell), serve it to the tailnet over HTTPS (no router port, not public):
+2. Start Ovis (above). Check from Windows PowerShell that it answers on loopback and wants the token:
+   ```powershell
+   curl.exe -s -o NUL -w "%{http_code}" http://127.0.0.1:7317/api/machines    # 401
+   ```
+3. Publish it inside the tailnet only, over HTTPS (needs approval; it changes Tailscale's own
+   configuration, not a firewall or the router; `--bg` keeps it until you turn it off):
    ```powershell
    tailscale serve --bg --https=443 http://127.0.0.1:7317
-   tailscale serve status
+   tailscale serve status        # must say "(tailnet only)"
    ```
-4. Open the `https://<pc>.<tailnet>.ts.net` address on the phone and pair it. Undo with
-   `tailscale serve --https=443 off`.
+4. Check that nothing is public:
+   ```powershell
+   tailscale funnel status       # must report no Funnel: nothing listed, or "No serve config"
+   tailscale serve status        # no "(Funnel on)" next to the address
+   ```
+   ```bash
+   docs/windows-wsl-herdr-core/ovis-wsl.sh status    # no WARNING: still 127.0.0.1 only
+   ```
+   Do not run `tailscale funnel`: it publishes to the internet. Open no router port, and no
+   firewall rule is needed (the only listener is on loopback).
+5. On the phone (Tailscale on), open `https://<pc>.<tailnet>.ts.net` in Chrome, enter the token (read it
+   on the PC with `sed -n 's/^OVIS_TOKEN=//p' ~/.config/ovis/token.env`, not in a shared screen or log),
+   then Settings → Phone & devices → Install app.
+6. Undo: `tailscale serve --https=443 off` (Windows), `$S stop` (WSL). The core is untouched either way.
 
-Never bind `0.0.0.0`, and never use `tailscale funnel` (public). Whoever reaches Ovis can type into
-the user's terminals.
+Checks on the phone: on Wi-Fi and again on mobile data the address opens; the workspaces and panes match
+the Herdr app's; output updates without reloading; after locking the phone, the page reconnects.
 
 ## Tests
 
@@ -109,8 +149,10 @@ the user's terminals.
 | `hc.exe connect` killed: Ovis reopens it, panes and ticker continue, nothing is typed twice | PASS |
 | Invalid pane, missing fields, wrong JSON: 404 / 400, no write | PASS |
 | One real idle pane viewed with `keep_size`; size, turn, labels and foreground unchanged | PASS |
+| `ovis-wsl.sh` start / status / stop; Windows localhost: 401 without the token, 200 with it; loopback only; token absent from the log; core untouched | PASS |
 | Android device, Tailscale from mobile data | NOT RUN (needs the device and Tailscale) |
 | Auth rejects an unauthenticated non-loopback client | NOT RUN (loopback only) |
+| `tailscale serve` HTTPS, tailnet only, no Funnel | NOT RUN (Tailscale not installed) |
 | Windows (`C:\...`) repository and worktree facts from WSL | Not supported |
 
 ## Troubleshooting
@@ -121,5 +163,5 @@ the user's terminals.
 
 ## Uninstall
 
-Stop the Ovis process and remove the two variables. The core, the Herdr app and every terminal
+Run `ovis-wsl.sh stop`, then delete `~/.config/ovis/token.env` and `~/.local/state/ovis-wsl`, and turn the Tailscale publication off if you made it. The core, the Herdr app and every terminal
 are untouched.
