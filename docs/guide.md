@@ -888,10 +888,12 @@ PC's panes are then the app's. One server serves one runtime, chosen as it start
    Herdr app is installed or its core runs.
 
 Ovis needs an `hc` speaking
-protocol generation 1 (checked with 0.1.14 and 0.1.17), and finds it the way the Herdr app does:
-`OVIS_HC_BIN`, then the `PATH`, then your login shell's `PATH`, then the usual install places
-(`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, mise, Nix and cargo), taking `herdr-core`
-before `hc` in each. A candidate counts only when `--version` says `hc …`, since some window
+protocol generation 1 (checked with 0.1.14 and 0.1.17), and looks for it in `OVIS_HC_BIN`, then
+the usual install places (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, mise, Nix and
+cargo), then the `PATH`, then your login shell's `PATH`, taking `herdr-core` before `hc` in each.
+On Linux and macOS a candidate found there is run only when it and every folder on the way to it
+belong to you or root and nobody else can write them; a path you set in `OVIS_HC_BIN` is run as
+you named it. A candidate counts only when `--version` says `hc …`, since some window
 managers ship an unrelated `hc`. Looking runs nothing but `--version`: every other hc command
 starts a core when none runs. When no candidate answers, Ovis does not start and says where it
 looked, rather than run an `hc` that may not be herdr-core's.

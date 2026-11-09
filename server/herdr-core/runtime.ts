@@ -146,7 +146,7 @@ export async function startRuntime(stateDir: string, find: () => Promise<FoundHc
   // before the first `hc connect`: the plugin's or a service's PATH may not hold hc, or hold another one
   const core = await find();
   if (core === null) {
-    throw new NoHerdrCoreError("no herdr-core found: no OVIS_HC_BIN, nor herdr-core or hc on the PATH, the login shell's PATH, ~/.local/bin, /opt/homebrew/bin, /usr/local/bin, mise, Nix or cargo, answered `--version` with `hc …`. Install herdr-core (https://herdr.dev/core) or set OVIS_HC_BIN to its full path");
+    throw new NoHerdrCoreError("no herdr-core found: no OVIS_HC_BIN, nor herdr-core or hc in ~/.local/bin, /opt/homebrew/bin, /usr/local/bin, mise, Nix, cargo, the PATH or the login shell's PATH, answered `--version` with `hc …` (one in a folder another account can change is not run). Install herdr-core (https://herdr.dev/core) or set OVIS_HC_BIN to its full path");
   }
   found = core.bin;
   search = find;

@@ -7,8 +7,9 @@
  * uses herdr's TUI. So a candidate is only ever asked `--version`, and the core counts as running
  * when its socket file is there: nothing connects to it.
  */
-import { statSync } from "node:fs";
-import { delimiter, join, resolve } from "node:path";
+import { lstatSync, readFileSync, readlinkSync, statSync, type Stats } from "node:fs";
+import { userInfo } from "node:os";
+import { delimiter, dirname, join, resolve } from "node:path";
 import type { HerdrCoreFacts } from "../../shared/machines.ts";
 import { readHerdrConfig } from "../herdr-sidebar.ts";
 import { loginPathProbe, loginShell } from "../shell-agent.ts";
@@ -43,11 +44,16 @@ const EXIT_GRACE_MS = 500;
 const PROBE_OUTPUT_LIMIT = 64 * 1024;
 
 /**
- * The first herdr-core found, or null. Where it looks, in order: OVIS_HC_BIN; this process's
- * PATH; the user's login shell's PATH (a server started by herdr's plugin or a service may not
- * carry it); then the usual install places. In each folder `herdr-core` comes before `hc`, the
- * name the core's installer gives it, and a candidate counts only when `--version` exits 0 and
- * says `hc …`: some window managers ship an unrelated `hc`.
+ * The first herdr-core found, or null. Where it looks, in order: OVIS_HC_BIN; the usual install
+ * places; this process's PATH; then the user's login shell's PATH (a server started by herdr's
+ * plugin or a service may not carry it). In each folder `herdr-core` comes before `hc`, the name
+ * the core's installer gives it, and a candidate counts only when `--version` exits 0 and says
+ * `hc …`: some window managers ship an unrelated `hc`.
+ *
+ * Asking `--version` runs the candidate as this user, so on Linux and macOS only one that no
+ * other account can have put or changed there is run (ownedByUser); an OVIS_HC_BIN path is the
+ * user's own choice and is run as named. Windows has no mode bits to read: there the usual places
+ * (under the user's profile) coming before the PATH is the only protection.
  */
 export async function findHc(options: FindHcOptions = {}): Promise<FoundHc | null> {
   const env = options.env ?? process.env;
@@ -57,24 +63,181 @@ export async function findHc(options: FindHcOptions = {}): Promise<FoundHc | nul
   const names = (dir: string) => [join(dir, `herdr-core${exe}`), join(dir, `hc${exe}`)];
   const dirsOn = (path: string | undefined) => (path ?? "").split(platform === "win32" ? ";" : delimiter).filter((dir) => dir !== "");
   const seen = new Set<string>();
-  const pick = async (candidates: string[]): Promise<FoundHc | null> => {
+  const harmless = process.platform === "win32" ? null : harmlessGroups();
+  // what the candidate runs by name (`#!/usr/bin/env python3`, a wrapper's commands) comes only from
+  // PATH folders that pass the same check
+  let probeEnv: Env | undefined;
+  const probing = () => probeEnv ??= harmless === null ? env : { ...env, PATH: dirsOn(env["PATH"]).filter((dir) => ownedByUser(resolve(dir), harmless, true)).join(delimiter) };
+  const pick = async (candidates: string[], named = false): Promise<FoundHc | null> => {
     for (const candidate of candidates) {
-      if (seen.has(candidate)) continue;
-      seen.add(candidate);
-      if (!isFile(candidate)) continue;
-      const version = await hcVersion(candidate, env, options.timeoutMs ?? PROBE_TIMEOUT_MS);
-      // absolute: a terminal attach runs it from another folder (server/core/terminal-process.ts)
-      if (version !== null) return { bin: resolve(candidate), version };
+      // absolute: a terminal attach runs it from another folder (server/core/terminal-process.ts),
+      // and what is run is what was checked, whatever folder the server is in
+      const bin = resolve(candidate);
+      if (seen.has(bin)) continue;
+      seen.add(bin);
+      if (!isFile(bin)) continue;
+      if (!named && harmless !== null && !ownedByUser(bin, harmless)) continue;
+      const version = await hcVersion(bin, probing(), options.timeoutMs ?? PROBE_TIMEOUT_MS);
+      if (version !== null) return { bin, version };
     }
     return null;
   };
-  // a bare name is looked up on the PATH, as a shell would run it
+  // a bare name is looked up on the PATH, as a shell would run it, and checked like anything found
+  // there: one refused leaves the next PATH folder to look in (Windows checks nothing, so its first)
   const configured = env["OVIS_HC_BIN"];
-  const named = configured && !/[\\/]/.test(configured) ? Bun.which(configured, { PATH: env["PATH"] ?? "" }) ?? configured : configured;
-  return (named ? await pick([named]) : null)
+  const bare = configured !== undefined && !/[\\/]/.test(configured);
+  const named = !configured ? [] : !bare ? [configured]
+    : harmless === null ? [Bun.which(configured, { PATH: env["PATH"] ?? "" }) ?? configured]
+    : dirsOn(env["PATH"]).map((dir) => join(dir, configured));
+  return await pick(named, !bare)
+    ?? await pick((options.usualDirs ?? usualHcDirs(home, platform, env)).flatMap(names))
     ?? await pick(dirsOn(env["PATH"]).flatMap(names))
-    ?? await pick(dirsOn(await (options.loginShellPath ?? (() => loginShellPath(env, platform)))() ?? "").flatMap(names))
-    ?? await pick((options.usualDirs ?? usualHcDirs(home, platform, env)).flatMap(names));
+    ?? await pick(dirsOn(await (options.loginShellPath ?? (() => loginShellPath(env, platform)))() ?? "").flatMap(names));
+}
+
+/** the most links followed to reach one candidate, as the kernel allows (Linux's MAXSYMLINKS) */
+const MAX_LINKS = 40;
+
+/**
+ * Whether nothing at `path` (absolute) can be another account's doing (POSIX): every folder, link
+ * and the file itself that reaching it walks through, from `/`, belongs to this user or root, so
+ * the check and the run that follows see the same file. The file and the folder holding it are
+ * writable by nobody else; a folder on the way may be when it is sticky (/tmp), where nobody can
+ * rename or replace an entry they do not own. Group write counts as nobody else's only for a
+ * group `harmless` names, and no ACL may grant write either (aclGrantsWrite). With `asFolder`,
+ * the path is a folder held to the same rule as a file's.
+ */
+export function ownedByUser(path: string, harmless: (gid: number, path: string) => boolean, asFolder = false): boolean {
+  const uid = process.getuid?.();
+  if (uid === undefined) return false;
+  const owned = (stats: Stats) => stats.uid === uid || stats.uid === 0;
+  const acls = new Map<string, boolean>();
+  const writable = (stats: Stats, at: string) => {
+    if ((stats.mode & 0o002) !== 0) return true;
+    const group = (stats.mode & 0o020) !== 0;
+    if (group && !harmless(stats.gid, at)) return true;
+    // on Linux a named ACL entry can write only through the group bits (they show its mask); a
+    // macOS ACL never shows in the mode
+    if (!group && process.platform !== "darwin") return false;
+    let grants = acls.get(at);
+    if (grants === undefined) acls.set(at, grants = aclGrantsWrite(at));
+    return grants;
+  };
+  const parts = (path: string) => path.split("/").filter((part) => part !== "" && part !== ".");
+  try {
+    // `folder` is always a real path whose every folder has been checked on the way to it
+    let folder = "/";
+    let here = statSync("/");
+    const rest = parts(path);
+    let links = 0;
+    while (true) {
+      if (!here.isDirectory() || !owned(here) || writable(here, folder) && (here.mode & 0o1000) === 0) return false;
+      const name = rest.shift();
+      if (name === undefined) return asFolder && !writable(here, folder);
+      if (name === "..") {
+        folder = dirname(folder);
+        here = statSync(folder);
+        continue;
+      }
+      const entry = join(folder, name);
+      const stats = lstatSync(entry);
+      if (!owned(stats)) return false;
+      if (stats.isSymbolicLink()) {
+        if (++links > MAX_LINKS) return false;
+        const target = readlinkSync(entry);
+        rest.unshift(...parts(target));
+        if (target.startsWith("/")) {
+          folder = "/";
+          here = statSync("/");
+        }
+        continue;
+      }
+      if (rest.length === 0 && !stats.isDirectory()) return !asFolder && stats.isFile() && !writable(stats, entry) && !writable(here, folder);
+      folder = entry;
+      here = stats;
+    }
+  } catch {
+    return false;
+  }
+}
+
+/** where Homebrew keeps what it installs, its folders group-writable by admin */
+const HOMEBREW_PREFIXES = ["/opt/homebrew", "/usr/local"];
+
+/**
+ * The groups whose write access lets in nobody else: the user's own private group (with umask 002,
+ * as on Debian and Ubuntu, ~/.local/bin is group-writable), and on macOS admin inside Homebrew's
+ * prefixes, which Homebrew leaves group-writable by admin: whoever can change hc there can change
+ * the brew the user runs already.
+ */
+export function harmlessGroups(platform: NodeJS.Platform = process.platform, own: () => number | null = ownGroup): (gid: number, path: string) => boolean {
+  let gid: number | null | undefined;
+  return (group, path) => {
+    if (platform === "darwin" && group === 80) return HOMEBREW_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+    gid ??= own();
+    return group === gid;
+  };
+}
+
+function ownGroup(): number | null {
+  const read = (file: string) => { try { return readFileSync(file, "utf8"); } catch { return null; } };
+  try {
+    return privateGroup(userInfo().username, process.getgid?.() ?? -1, read("/etc/group") ?? "", read("/etc/passwd") ?? "", read("/etc/nsswitch.conf") ?? "");
+  } catch {
+    return null;
+  }
+}
+
+/** the account sources whose every account /etc lists: anything else (sss, ldap, nis, winbind) may add members unseen */
+const LOCAL_SOURCES = new Set(["files", "compat", "systemd"]);
+
+/**
+ * `gid` when it is `user`'s private group, from /etc/group and /etc/passwd: named after them, with
+ * no other member, and no other account's primary group; else null. Only when nsswitch.conf takes
+ * accounts from local files alone: a group a directory service could add a member to is not taken
+ * on trust, nor one whose passwd could not be read.
+ */
+export function privateGroup(user: string, gid: number, groups: string, passwd: string, nsswitch: string): number | null {
+  for (const line of nsswitch.split("\n")) {
+    const match = /^\s*(passwd|group)\s*:(.*)$/.exec(line);
+    if (match && match[2]!.split(/\s+/).some((source) => source !== "" && !source.startsWith("[") && !LOCAL_SOURCES.has(source))) return null;
+  }
+  if (passwd.trim() === "") return null;
+  const lines = (text: string) => text.split("\n").map((line) => line.split(":")).filter((fields) => fields.length >= 4 && /^\d+$/.test(fields[2]!.trim()));
+  const named = lines(groups).filter((fields) => Number(fields[2]) === gid);
+  if (named.length === 0) return null;
+  for (const [name, , , members] of named) {
+    if (name !== user || members!.split(",").some((member) => member.trim() !== "" && member.trim() !== user)) return null;
+  }
+  const others = passwd.split("\n").map((line) => line.split(":")).some((fields) => fields.length >= 4 && fields[0] !== user && /^\d+$/.test(fields[3]!.trim()) && Number(fields[3]) === gid);
+  return others ? null : gid;
+}
+
+/**
+ * Whether an ACL lets anybody else write `path` (a file or folder, never a link), read from
+ * `/bin/ls`: on Linux one marked `+` (only asked when the group bits show write, which an ACL
+ * granting it always does), on macOS an `allow` entry with any write right for anybody but this
+ * user. What cannot be read counts as granting.
+ */
+function aclGrantsWrite(path: string): boolean {
+  const darwin = process.platform === "darwin";
+  try {
+    const run = Bun.spawnSync(["/bin/ls", darwin ? "-lde" : "-ld", "--", path], { env: { LC_ALL: "C" }, stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+    if (run.exitCode !== 0) return true;
+    const listing = run.stdout.toString();
+    return darwin ? macAclGrantsWrite(listing, userInfo().username) : /^\S{10}\+/.test(listing);
+  } catch {
+    return true;
+  }
+}
+
+/** a macOS `ls -lde` listing: whether an ACL entry allows anybody but `user` to write, add, delete or take over */
+export function macAclGrantsWrite(listing: string, user: string): boolean {
+  return listing.split("\n").some((line) => {
+    const entry = /^\s*\d+:\s+(\S+)\s+(?:inherited\s+)?allow\s+(.*)$/.exec(line);
+    return entry !== null && entry[1] !== `user:${user}`
+      && /\b(write|append|add_file|add_subdirectory|delete|delete_child|writeattr|writeextattr|writesecurity|chown)\b/.test(entry[2]!);
+  });
 }
 
 /** Where herdr-core gets installed: its own installer (~/.local/bin), Homebrew, mise, Nix, cargo. */
