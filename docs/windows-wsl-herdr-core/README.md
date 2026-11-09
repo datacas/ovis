@@ -81,7 +81,60 @@ $S token rotate     # a new token; restart to use it, and sign each device in ag
 The script never runs `hc server start|stop|restart`, `hc ls` or `hc server status` (each starts a core
 when none runs): only `hc.exe --version`. Stopping Ovis ends its `hc.exe connect` child; the core and every
 terminal keep running. It installs no Windows service, scheduled task or firewall rule. A server started
-this way ends when WSL shuts down; start it again (no state is lost: terminals live in the core).
+this way ends when WSL shuts down; start it again, or install the service (next section). No state is lost: terminals live in the core.
+
+## Start with Windows
+
+Three pieces, none of which starts, stops or restarts the Windows core:
+
+| Piece | Who starts it | What it does |
+|---|---|---|
+| Tailscale | its own Windows service (automatic, installed with it) | the tailnet and `tailscale serve` (kept in Tailscale's config across restarts) |
+| WSL + the Ovis service | a Windows scheduled task for your user, at logon (`ovis-wsl-task.ps1`) | starts the distribution and keeps it up, so systemd starts `ovis-wsl.service` |
+| The Herdr app and its core | **you**: the Herdr app has no start-with-Windows entry on this PC (no Run key, Startup shortcut or task) | the terminals Ovis shows |
+
+`ovis-wsl.service` is a systemd **user** service (it needs no root and sees only your files). It runs
+`ovis-wsl.sh run`: it reads the token from `token.env`, forces `127.0.0.1`, and **waits until a
+`herdr-core.exe` runs on Windows** before starting Ovis, because `hc connect` would start a core of its own.
+`Restart=on-failure` with at most 5 starts in 5 minutes. Logs go to the journal. The service needs
+`Linger=yes` (`loginctl show-user $USER -p Linger`) to start without a login session.
+
+```bash
+S=docs/windows-wsl-herdr-core/ovis-wsl.sh
+$S service install        # writes ~/.config/systemd/user/ovis-wsl.service, enables and starts it
+$S status                 # service state, Windows core, hc.exe version, loopback warning
+$S service logs 100       # journalctl --user -u ovis-wsl
+$S restart                # with the service installed, start/stop/restart go through systemd: one Ovis
+```
+
+```powershell
+# Windows PowerShell, your user, no administrator rights
+.\docs\windows-wsl-herdr-core\ovis-wsl-task.ps1 -Install -Script /home/<you>/<path>/docs/windows-wsl-herdr-core/ovis-wsl.sh
+Start-ScheduledTask 'Ovis WSL keepalive'      # or wait for the next logon
+.\docs\windows-wsl-herdr-core\ovis-wsl-task.ps1 -Status
+```
+
+The service runs the script from the checkout, so keep that checkout on a branch that has it (after an
+`update`, `service logs` shows a failure at once). The task's hidden window flashes once at logon.
+
+To start the Herdr app with Windows too (not done here): add a shortcut to
+`%LOCALAPPDATA%\Programs\herdr-app\herdr-app.exe` in `shell:startup`. Without it, after a reboot Ovis waits (`status` says
+`windows core: NOT running`) until you open the Herdr app, then comes up by itself within seconds.
+
+If the Windows core stops while Ovis runs, Ovis's next `hc connect` starts a core of its own (hc does that
+for any client); open the Herdr app again if that happens.
+
+### Remove it all
+
+```bash
+docs/windows-wsl-herdr-core/ovis-wsl.sh service uninstall   # stops and removes the user service
+docs/windows-wsl-herdr-core/ovis-wsl.sh keepalive stop      # ends the keepalive sleep, if it still runs
+```
+```powershell
+.\docs\windows-wsl-herdr-core\ovis-wsl-task.ps1 -Uninstall   # removes the task and ends its keepalive
+```
+
+Tailscale's `serve` and its Windows service stay until you remove them (`tailscale serve --https=443 off`).
 
 ## Android over Tailscale
 
@@ -151,9 +204,13 @@ the Herdr app's; output updates without reloading; after locking the phone, the 
 | Invalid pane, missing fields, wrong JSON: 404 / 400, no write | PASS |
 | One real idle pane viewed with `keep_size`; size, turn, labels and foreground unchanged | PASS |
 | `ovis-wsl.sh` start / status / stop; Windows localhost: 401 without the token, 200 with it; loopback only; token absent from the log; core untouched | PASS |
-| Android device, Tailscale from mobile data | NOT RUN (needs the device and Tailscale) |
+| Systemd user service: start/stop/restart/status/logs; `kill -9` restarts it (`Restart=on-failure`); a second `run` is refused (port, then state dir); token not in the unit or journal; loopback only | PASS |
+| `run` waits for a Windows core and never starts one (checked with a stand-in `tasklist.exe`) | PASS |
+| Logon task: created for the user, one keepalive at a time, `Start-ScheduledTask` twice leaves one `sleep` | PASS |
+| Android over Tailscale Serve (Wi-Fi and mobile data), pairing, interaction, reconnection | PASS (checked by the user on a phone) |
+| Cold start after a Windows restart (task, WSL, service, core, Tailscale) | NOT RUN (needs a restart) |
 | Auth rejects an unauthenticated non-loopback client | NOT RUN (loopback only) |
-| `tailscale serve` HTTPS, tailnet only, no Funnel | NOT RUN (Tailscale not installed) |
+| `tailscale serve` HTTPS, tailnet only, no Funnel (`tailscale serve status`: tailnet only; no `AllowFunnel`) | PASS |
 | Windows (`C:\...`) repository and worktree facts from WSL | Not supported |
 
 ## Troubleshooting
@@ -164,5 +221,5 @@ the Herdr app's; output updates without reloading; after locking the phone, the 
 
 ## Uninstall
 
-Run `ovis-wsl.sh stop`, then delete `~/.config/ovis/token.env` and `~/.local/state/ovis-wsl`, and turn the Tailscale publication off if you made it. The core, the Herdr app and every terminal
+Remove the automatic start (above), run `ovis-wsl.sh stop`, then delete `~/.config/ovis/token.env` and `~/.local/state/ovis-wsl`, and turn the Tailscale publication off if you made it. The core, the Herdr app and every terminal
 are untouched.
